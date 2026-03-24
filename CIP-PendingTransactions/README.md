@@ -7,7 +7,7 @@ Authors:
   - "[Yurelle Gamier] <yurelle.gamier@gmail.com>"
 Implementors: []
 Discussions:
-  - 
+  - https://forum.cardano.org/t/cip-proposal-pending-transactions-a-two-phase-transaction-protocol-for-safer-crypto-sends/153742
 Created: 2026-03-23
 License: CC-BY-4.0
 ---

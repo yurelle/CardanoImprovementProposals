@@ -4,7 +4,7 @@ Title: Pending Transactions - Two-Phase Transaction Protocol (2PT)
 Status: Proposed
 Category: Wallets
 Authors:
-  - "[Yurelle Gamier] <yurelle.gamier@gmail.com>"
+  - Yurelle Gamier <yurelle.gamier@gmail.com>
 Implementors: []
 Discussions:
   - https://forum.cardano.org/t/cip-proposal-pending-transactions-a-two-phase-transaction-protocol-for-safer-crypto-sends/153742
@@ -14,13 +14,15 @@ License: CC-BY-4.0
 
 ## Abstract
 
+The problem this proposal addresses is formally described in CPS-?: "Irreversible Cryptocurrency Transactions Create Unrecoverable User Errors and Adoption Barriers".
+
 This document specifies a protocol for pending cryptocurrency transactions, wherein a sender may reserve funds for a recipient without immediately and irrevocably transferring them. The sender may subsequently either confirm the transfer, making it permanent, or abort it, returning the funds to their own wallet. The recipient is notified of and can observe the reserved funds throughout. Authority to confirm, abort, or decline may be delegated to designated parties, enabling trustless escrow, automated merchant verification, and bilateral negotiation flows. This protocol is designed to be implementable on any cryptocurrency network capable of expressing fund locking and optional time-bounded state transitions, and is motivated by significant usability, safety, and commercial deficiencies in current one-phase, irreversible transaction models.
 
 This specification is organized into three compliance tiers. Tiers are cumulative: each tier requires full implementation of all prior tiers. Tier 1 defines the minimum viable protocol suitable for conservative chains. Tier 2 extends with authority delegation, counterparty decline, and capability tokens. Tier 3 adds amendment negotiation and advanced escrow patterns.
 
 ---
 
-## Motivation: why is this CIP necessary?
+## Motivation: Why is this CIP necessary?
 
 ### The Problem with Irreversible Transactions
 
@@ -98,15 +100,12 @@ This specification defines the Two-Phase Transaction Protocol in three complianc
 
 #### State Machine (Tier 1)
 
-```
-[NONE] ──── PREPARE() ────► [PENDING]
-                                │
-                    ┌───────────┴───────────┐
-                    │                       │
-               CONFIRM()          ABORT() / auto-abort on timeout
-                    │                       │
-                    ▼                       ▼
-             [CONFIRMED]             [ABORTED]
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING : PREPARE()
+    PENDING --> CONFIRMED : CONFIRM()
+    PENDING --> ABORTED : ABORT()
+    PENDING --> ABORTED : auto-abort<br>on timeout
 ```
 
 CONFIRMED and ABORTED are terminal states. No further operations are valid after either.
@@ -309,17 +308,13 @@ DECLINED is a terminal state functionally identical to ABORTED in terms of fund 
 
 #### Updated State Machine (Tier 2)
 
-```
-[NONE] ──── PREPARE() ────► [PENDING]
-                                │
-           ┌────────────────────┼────────────────────┐
-           │                    │                    │
-       CONFIRM()            ABORT() /            DECLINE()
-   (per commit_auth)      auto-abort on      (per decline_auth;
-           │                 timeout         sender never eligible)
-           │                    │                    │
-           ▼                    ▼                    ▼
-      [CONFIRMED]           [ABORTED]            [DECLINED]
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING : PREPARE()
+    PENDING --> CONFIRMED : CONFIRM()<br>(per commit_auth)
+    PENDING --> ABORTED : ABORT()<br>(per abort_auth)
+    PENDING --> ABORTED : auto-abort<br>on timeout
+    PENDING --> DECLINED : DECLINE()<br>(per decline_auth)
 ```
 
 ---
@@ -445,24 +440,20 @@ In addition to the Tier 1 and Tier 2 observability requirements, a conforming Ti
 
 #### Proposal Lifecycle and Timeouts
 
-```
-                           [PROPOSAL_PENDING]
-                                   │
-         ┌─────────────────────────┼─────────────────────────────┐
-         │                         │                             │
-   ACCEPT_AMEND              RETRACT_AMEND                REJECT_AMEND /
-   (non-proposer            (proposer only)               proposal_timeout expires /
-    principal)                     │                      parent transaction reaches
-        │                          │                      any terminal state
-        │                          │                             │
-        ▼                          ▼                             ▼
-[PROPOSAL_ACCEPTED]       [PROPOSAL_RETRACTED]           [PROPOSAL_REJECTED /
-        │                                                  PROPOSAL_LAPSED /
-        ▼                                                  PROPOSAL_TERMINATED]
-(parent → REPLACED,
- new tx created,
- all sibling proposals
- → PROPOSAL_TERMINATED)
+```mermaid
+stateDiagram-v2
+    direction LR
+    TRANSACTION_PENDING --> PROPOSAL_PENDING : PROPOSE_AMEND()
+    PROPOSAL_PENDING --> PROPOSAL_ACCEPTED : ACCEPT_AMEND()<br>by non-proposer
+    PROPOSAL_PENDING --> PROPOSAL_REJECTED : REJECT_AMEND()<br>by non-proposer
+    PROPOSAL_PENDING --> PROPOSAL_RETRACTED : RETRACT_AMEND()<br>by proposer
+    PROPOSAL_PENDING --> PROPOSAL_LAPSED : proposal_timeout<br>expires
+    PROPOSAL_PENDING --> PROPOSAL_TERMINATED : parent reaches<br>terminal state
+    note right of PROPOSAL_ACCEPTED
+        Parent transitions to REPLACED.
+        New transaction created.
+        All sibling proposals terminated.
+    end note
 ```
 
 - If a proposal's `proposal_timeout` expires before it is accepted, rejected, or retracted, it lapses automatically (PROPOSAL_LAPSED) with no effect on the parent transaction
@@ -473,27 +464,34 @@ In addition to the Tier 1 and Tier 2 observability requirements, a conforming Ti
 
 #### Updated State Machine (Tier 3)
 
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> PENDING : PREPARE()
+    PENDING --> CONFIRMED : CONFIRM()<br>per commit_auth
+    PENDING --> ABORTED : ABORT()<br>per abort_auth
+    PENDING --> ABORTED : auto-abort<br>on timeout
+    PENDING --> DECLINED : DECLINE()<br>per decline_auth
+    PENDING --> REPLACED : ACCEPT_AMEND()<br>by non-proposer
+    note right of REPLACED
+        New transaction created with new transaction_id.
+        All sibling proposals terminated.
+    end note
 ```
-Parent Transaction:
-  [PENDING] ─────────────────────────────────────────────────────────────────────────►
-      │                   │                   │                       │
-  CONFIRM()            ABORT() /           DECLINE()             ACCEPT_AMEND()
-(per commit_auth)     auto-abort on      (per decline_          (by non-proposer
-      │                timeout           auth; sender            principal only)
-      ▼                   │              never eligible)              │
-[CONFIRMED]               ▼                   │                       ▼
-                      [ABORTED]               ▼               [REPLACED] ──► new tx
-                                          [DECLINED]         (all sibling proposals
-                                                              → PROPOSAL_TERMINATED)
 
-                                                              
-                                                              
-Amendment Proposals (independent, non-blocking, multiple in-flight allowed):
-[PROPOSAL_PENDING] ──► ACCEPT_AMEND (non-proposer principal)  ──► [PROPOSAL_ACCEPTED]
-                   ──► REJECT_AMEND (non-proposer principal)  ──► [PROPOSAL_REJECTED]
-                   ──► RETRACT_AMEND (proposer only)          ──► [PROPOSAL_RETRACTED]
-                   ──► proposal_timeout expires               ──► [PROPOSAL_LAPSED]
-                   ──► parent reaches terminal state          ──► [PROPOSAL_TERMINATED]
+```mermaid
+stateDiagram-v2
+    direction LR
+    TRANSACTION_PENDING --> PROPOSAL_PENDING : PROPOSE_AMEND()
+    PROPOSAL_PENDING --> PROPOSAL_ACCEPTED : ACCEPT_AMEND()<br>by non-proposer
+    PROPOSAL_PENDING --> PROPOSAL_REJECTED : REJECT_AMEND()<br>by non-proposer
+    PROPOSAL_PENDING --> PROPOSAL_RETRACTED : RETRACT_AMEND()<br>by proposer
+    PROPOSAL_PENDING --> PROPOSAL_LAPSED : proposal_timeout<br>expires
+    PROPOSAL_PENDING --> PROPOSAL_TERMINATED : parent reaches<br>terminal state
+    note right of PROPOSAL_ACCEPTED
+        Parent transitions to REPLACED.
+        New transaction created.
+    end note
 ```
 
 ---
@@ -506,7 +504,7 @@ Backward-compatible additions (new optional parameters, new optional operations,
 
 ---
 
-## Rationale: how does this CIP achieve its goals?
+## Rationale: How does this CIP achieve its goals?
 
 ### Design Decisions
 
@@ -542,16 +540,6 @@ This proposal introduces no changes to existing transaction semantics. Standard 
 
 ---
 
-## Implementation Notes (Non-Normative)
-
-**UTXO-based chains (Bitcoin):** PREPARE locks one or more UTXOs to a script accepting CONFIRM, ABORT, or DECLINE redeemers, each gated by signature validation per the configured authority model and corresponding pubkeys. Timeout enforcement via `OP_CHECKLOCKTIMEVERIFY`. Tier 1 may be achievable via PSBT-based wallet coordination without a protocol change; Tier 2 capability tokens likely require covenant opcodes. BIP-345 (OP_VAULT) provides relevant prior art and potentially useful primitives for Tier 1.
-
-**EUTXO-based chains (Cardano):** Cardano's EUTXO model and native Plutus validator scripts are well-suited to express all three tiers of this protocol. A PREPARE maps to a script-locked UTXO; CONFIRM, ABORT, and DECLINE map to redeemers gated by signature validation per the authority configuration and capability token pubkeys. Timeout enforcement via native slot validity ranges. Tier 1 and Tier 2 are likely implementable as wallet-level standards without protocol changes, making Cardano the natural reference implementation chain. Tier 3 amendment proposals can be expressed as additional UTXOs referencing the parent transaction ID.
-
-**Account-based chains (Ethereum/EVM):** PREPARE calls a standard escrow contract holding funds and exposing CONFIRM, ABORT, and DECLINE functions gated by the authority configuration and pubkey verification. All three tiers are implementable as Solidity contracts today. Standardization of the contract interface (ABI) and wallet UX conventions is the primary remaining work.
-
----
-
 ## Path to Active
 
 ### Acceptance Criteria
@@ -576,7 +564,17 @@ Tier 2 and Tier 3 adoption are left to the ecosystem and may be addressed in sub
 
 ---
 
-## Open Questions / Future Work
+## Appendix
+
+### Implementation Notes (Non-Normative)
+
+**UTXO-based chains (Bitcoin):** PREPARE locks one or more UTXOs to a script accepting CONFIRM, ABORT, or DECLINE redeemers, each gated by signature validation per the configured authority model and corresponding pubkeys. Timeout enforcement via `OP_CHECKLOCKTIMEVERIFY`. Tier 1 may be achievable via PSBT-based wallet coordination without a protocol change; Tier 2 capability tokens likely require covenant opcodes. BIP-345 (OP_VAULT) provides relevant prior art and potentially useful primitives for Tier 1.
+
+**EUTXO-based chains (Cardano):** Cardano's EUTXO model and native Plutus validator scripts are well-suited to express all three tiers of this protocol. A PREPARE maps to a script-locked UTXO; CONFIRM, ABORT, and DECLINE map to redeemers gated by signature validation per the authority configuration and capability token pubkeys. Timeout enforcement via native slot validity ranges. Tier 1 and Tier 2 are likely implementable as wallet-level standards without protocol changes, making Cardano the natural reference implementation chain. Tier 3 amendment proposals can be expressed as additional UTXOs referencing the parent transaction ID.
+
+**Account-based chains (Ethereum/EVM):** PREPARE calls a standard escrow contract holding funds and exposing CONFIRM, ABORT, and DECLINE functions gated by the authority configuration and pubkey verification. All three tiers are implementable as Solidity contracts today. Standardization of the contract interface (ABI) and wallet UX conventions is the primary remaining work.
+
+### Open Questions / Future Work
 
 - Standardized wallet UX guidelines for surfacing pending, declined, replaced, and amended transactions to both parties
 - Payment request format: a standard URI or QR schema encoding recipient address, expected amount, and capability token public keys, enabling one-scan transaction initiation
